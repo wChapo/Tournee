@@ -85,13 +85,19 @@
   <label for="photos" class="hidden" id="photosLbl">photos</label>
   <input type="file" id="photos" accept="image/*" multiple class="hidden">
   <div class="row">
-    <button class="sec" id="btnPhotos" style="margin-top:0">Importer des captures</button>
+    <button class="sec" id="btnPhotos" style="margin-top:0">Importer des photos</button>
     <button class="sec" id="btnClean" style="margin-top:0">Nettoyer le texte</button>
   </div>
-  <div class="hint">Captures : fais des captures d'écran de la liste dans l'appli, sélectionne-les toutes d'un coup, l'app lit le texte et garde seulement les adresses. Tu peux aussi coller n'importe quel texte en vrac puis appuyer sur « Nettoyer ».</div>
+  <label for="imgType">Type de photos</label>
+  <select id="imgType" style="width:100%;background:#0d1014;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px;font:inherit;font-size:16px">
+    <option value="labels">Étiquettes de colis (1 adresse par photo)</option>
+    <option value="list">Captures de la liste dans l'appli</option>
+  </select>
+  <div class="hint">Étiquettes : une photo par colis, cadrée sur l'étiquette, bien à plat. Captures : fais des captures d'écran de la liste dans l'appli, sélectionne-les toutes d'un coup, l'app lit le texte et garde seulement les adresses. Tu peux aussi coller n'importe quel texte en vrac puis appuyer sur « Nettoyer ».</div>
   <button id="btnScan" style="margin-top:8px">Scanner les colis</button>
   <div id="ocrStatus" class="hint"></div>
-  <textarea id="stops" style="margin-top:10px" placeholder="Un arrêt par ligne. Exemples :
+  <div style="text-align:right;margin-top:8px"><button class="sec small" id="btnClear">Vider la liste</button></div>
+  <textarea id="stops" style="margin-top:6px" placeholder="Un arrêt par ligne. Exemples :
 64 ; 12 rue Victor Hugo 94000 Créteil
 65 - 4 avenue Foch, Créteil
 12 bd Jean Jaurès 94000 Créteil *"></textarea>
@@ -162,50 +168,86 @@
   }
 
   // ---------- Extraction d'adresses depuis un texte en vrac ----------
-  var STREET = /\b(\d{1,4}\s*(bis|ter|quater|[a-d])?\s*,?\s+)?(rue|r\.|avenue|av\.?|ave|boulevard|bd|bld|blvd|all[ée]e|chemin|ch\.|place|pl\.|impasse|imp\.?|route|rte|quai|cours|square|sq\.?|r[ée]sidence|r[ée]s\.?|voie|passage|sentier|cit[ée]|rond[- ]point|lotissement|lot\.?|chauss[ée]e|faubourg|fg|mail|promenade|villa|hameau|lieu[- ]dit|parvis|esplanade|traverse|venelle|ruelle|clos|domaine|zac|za|zi)\b/i;
+  var TYPES = "rue|avenue|av|ave|boulevard|bd|bld|blvd|all[ée]e|chemin|place|impasse|imp|route|rte|quai|cours|square|r[ée]sidence|voie|passage|sentier|cit[ée]|rond[- ]point|lotissement|chauss[ée]e|faubourg|fg|mail|promenade|villa|hameau|lieu[- ]dit|parvis|esplanade|traverse|venelle|ruelle|clos|domaine";
+  // Numéro + type de voie + nom : "12 rue Victor Hugo", "18 bis allée des Tilleuls"
+  var ADDR = new RegExp("(^|[^0-9])(\\d{1,4}\\s*(?:bis|ter|quater|[a-d])?\\s*,?\\s+(?:" + TYPES + ")\\.?\\s+[A-Za-zÀ-ÿ'][A-Za-zÀ-ÿ' \\-]{2,})", "i");
   var CP = /\b(\d{5})\b\s*([A-Za-zÀ-ÿ' \-]{2,})?/;
+  var SENDER = /exp[ée]diteur|exp[ée]d|retour|return|sender|from|shipper|amazon|entrep[oô]t/i;
+  var RECIP = /destinataire|livrer|ship to|deliver to|adresse de livraison/i;
   function cleanLine(l){
-    return l.replace(/[|_~•·]/g, " ").replace(/\s{2,}/g, " ").trim();
+    return l.replace(/[|_~•·©®«»“”"]/g, " ").replace(/\s{2,}/g, " ").trim();
   }
-  function extractAddresses(text){
+  function deptOf(cp){ return cp ? cp.slice(0, 2) : null; }
+  // Renvoie des candidats {line, isSender, afterRecip}
+  function findCandidates(text){
     var lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
-    var out = [], i = 0;
+    var out = [], i = 0, senderZone = -99, recipZone = -99;
     while(i < lines.length){
       var l = lines[i];
-      // Format déjà propre : "64 ; adresse"
-      if(/^#?\d{1,4}\s*[;\-–—:)|]\s*\S/.test(l) && (STREET.test(l) || CP.test(l))){
-        out.push(l); i++; continue;
+      if(SENDER.test(l)) senderZone = i;
+      if(RECIP.test(l)) recipZone = i;
+      // Format déjà propre : "64 ; adresse 94000 Ville"
+      if(/^#?\d{1,4}\s*[;\-–—:)|]\s*\S/.test(l) && CP.test(l)){
+        out.push({ line: l, isSender: false, afterRecip: false }); i++; continue;
       }
-      if(STREET.test(l)){
-        var addr = l, ref = null;
-        for(var b=1;b<=3 && i-b>=0;b++){
-          var pv = lines[i-b];
-          if(/^#?\d{1,4}$/.test(pv)){ ref = pv.replace("#",""); break; }
-          if(STREET.test(pv) || CP.test(pv)) break;
-        }
-        var used = 0;
-        if(!CP.test(addr)){
+      var m = l.match(ADDR);
+      if(m){
+        var addr = m[2].replace(/\s+\d{5}.*$/, "").trim();
+        var cpm = l.slice(l.indexOf(m[2])).match(/\b\d{5}\b[A-Za-zÀ-ÿ' \-]*/);
+        var used = 0, cpTxt = cpm ? cpm[0].trim() : null;
+        if(!cpTxt){
           for(var k=1;k<=2 && i+k<lines.length;k++){
-            var nx = lines[i+k];
-            if(CP.test(nx) && !STREET.test(nx)){
-              addr += " " + nx.match(/\d{5}.*$/)[0]; used = k;
+            var nx = lines[i+k], cm = nx.match(/\b\d{5}\b[A-Za-zÀ-ÿ' \-]*/);
+            if(cm && !ADDR.test(nx)){
+              cpTxt = cm[0].trim(); used = k;
               var city2 = lines[i+k+1];
-              if(/^\d{5}$/.test(nx.trim()) && city2 && /^[A-Za-zÀ-ÿ' \-]{2,}$/.test(city2)){ addr += " " + city2; used++; }
+              if(/^\d{5}$/.test(cpTxt) && city2 && /^[A-Za-zÀ-ÿ' \-]{2,}$/.test(city2)){ cpTxt += " " + city2; used++; }
               break;
             }
           }
         }
-        var star = /\*\s*$/.test(addr) || /signature|remise en main/i.test(lines.slice(i, i+used+2).join(" "));
-        addr = addr.replace(/\*\s*$/, "").trim();
-        out.push((ref ? ref + " ; " : "") + addr + (star ? " *" : ""));
+        if(cpTxt){
+          var ref = null;
+          for(var b=1;b<=3 && i-b>=0;b++){
+            var pv = lines[i-b];
+            if(/^#?\d{1,4}$/.test(pv)){ ref = pv.replace("#",""); break; }
+            if(ADDR.test(pv) || CP.test(pv)) break;
+          }
+          var star = /signature|remise en main/i.test(lines.slice(Math.max(0,i-2), i+used+3).join(" "));
+          var isS = i - senderZone <= 4 && !(recipZone > senderZone);
+          if(isS) senderZone = -99; // seule la 1re adresse après "expéditeur" est celle de l'expéditeur
+          out.push({
+            line: (ref ? ref + " ; " : "") + addr + " " + cpTxt + (star ? " *" : ""),
+            cp: cpTxt.slice(0,5),
+            isSender: isS,
+            afterRecip: recipZone >= 0 && i - recipZone <= 5
+          });
+        }
         i += used + 1; continue;
       }
       i++;
     }
     return out;
   }
+  function filterDept(cands){
+    var m = $("city").value.match(/\b(\d{5})\b/), d = m ? deptOf(m[1]) : null;
+    if(!d) return cands;
+    return cands.filter(function(c){ return !c.cp || deptOf(c.cp) === d; });
+  }
+  // Texte en vrac / captures de liste : toutes les adresses
+  function extractAddresses(text){
+    return filterDept(findCandidates(text)).filter(function(c){ return !c.isSender; })
+      .map(function(c){ return c.line; });
+  }
+  // Une étiquette : une seule adresse, celle du destinataire
+  function extractFromLabel(text){
+    var c = filterDept(findCandidates(text));
+    var pick = c.filter(function(x){ return x.afterRecip; })[0] ||
+               c.filter(function(x){ return !x.isSender; })[0] || null;
+    return pick ? pick.line : null;
+  }
 
-  // ---------- OCR des captures (Tesseract.js, chargé à la demande) ----------
+  // ---------- OCR (Tesseract.js, chargé à la demande) ----------
   var tessPromise = null;
   function loadTesseract(){
     if(tessPromise) return tessPromise;
@@ -218,27 +260,49 @@
     });
     return tessPromise;
   }
+  // Agrandit, passe en niveaux de gris et augmente le contraste : bien meilleure lecture des étiquettes
+  function prepImage(file){
+    return createImageBitmap(file).then(function(bmp){
+      var scale = Math.min(2.5, 2200 / Math.max(bmp.width, bmp.height));
+      if(scale < 1) scale = Math.max(scale, 2200 / Math.max(bmp.width, bmp.height));
+      var w = Math.round(bmp.width * scale), hgt = Math.round(bmp.height * scale);
+      var cv = document.createElement("canvas"); cv.width = w; cv.height = hgt;
+      var ctx = cv.getContext("2d"); ctx.drawImage(bmp, 0, 0, w, hgt);
+      var img = ctx.getImageData(0, 0, w, hgt), d = img.data;
+      for(var i=0;i<d.length;i+=4){
+        var g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+        g = g > 150 ? 255 : (g < 90 ? 0 : (g - 90) * 255 / 60);
+        d[i] = d[i+1] = d[i+2] = g;
+      }
+      ctx.putImageData(img, 0, 0);
+      return cv;
+    }).catch(function(){ return file; });
+  }
   function ocrFiles(files){
-    var st = $("ocrStatus"), texts = [];
+    var st = $("ocrStatus"), labels = $("imgType").value === "labels";
+    var found = [], miss = 0, worker;
     st.textContent = "Préparation de la lecture (le premier lancement télécharge ~5 Mo)...";
-    var worker;
-    return loadTesseract().then(function(T){
-      return T.createWorker("fra");
-    }).then(function(w){
+    return loadTesseract().then(function(T){ return T.createWorker("fra"); }).then(function(w){
       worker = w;
       return Array.prototype.reduce.call(files, function(chain, f, idx){
         return chain.then(function(){
-          st.textContent = "Lecture capture " + (idx+1) + "/" + files.length + "...";
-          return worker.recognize(f).then(function(r){ texts.push(r.data.text); });
+          st.textContent = "Lecture image " + (idx+1) + "/" + files.length + "...";
+          return prepImage(f).then(function(src){ return worker.recognize(src); }).then(function(r){
+            if(labels){
+              var one = extractFromLabel(r.data.text);
+              if(one) found.push(one); else miss++;
+            } else {
+              found = found.concat(extractAddresses(r.data.text));
+            }
+          });
         });
       }, Promise.resolve());
     }).then(function(){
       if(worker) worker.terminate();
-      var found = extractAddresses(texts.join("\n"));
       var ta = $("stops");
       ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + found.join("\n");
       store.set("stopsDraft", ta.value);
-      st.textContent = found.length + " adresse(s) détectée(s). Vérifie vite la liste avant de calculer.";
+      st.textContent = found.length + " adresse(s) ajoutée(s)" + (miss ? ", " + miss + " étiquette(s) illisible(s) à taper à la main" : "") + ". Vérifie la liste.";
     }).catch(function(e){
       if(worker) worker.terminate();
       st.textContent = "Erreur de lecture : " + e.message;
@@ -248,6 +312,10 @@
   $("photos").addEventListener("change", function(){
     var f = this.files;
     if(f && f.length) ocrFiles(f).then(function(){ $("photos").value = ""; });
+  });
+  $("btnClear").addEventListener("click", function(){
+    $("stops").value = ""; store.set("stopsDraft", ""); scans = []; saveScans();
+    $("ocrStatus").textContent = "Liste vidée.";
   });
   $("btnClean").addEventListener("click", function(){
     var found = extractAddresses($("stops").value);
@@ -513,7 +581,7 @@
           setStatus("Localisation " + doneCount + "/" + (total-1) + "...");
           var cached = !!cache[withCity(it.address, city).toLowerCase()];
           return geocode(withCity(it.address, city)).then(function(g){
-            if(g){ it.lat = g.lat; it.lon = g.lon; it.score = g.score; it.label = g.label; }
+            if(g && g.score >= 0.4){ it.lat = g.lat; it.lon = g.lon; it.score = g.score; it.label = g.label; }
             else failed.push(it);
           }).catch(function(){ failed.push(it); })
             .then(function(){ doneCount++; setBar(doneCount/total); return cached ? null : sleep(80); });
@@ -602,7 +670,7 @@
   });
 
   // Exposé pour les tests
-  window.__tournee = { addrFromCode: addrFromCode, findStop: findStop, keyOf: keyOf, setCurrent: function(c){ current = c; }, extractAddresses: extractAddresses, parseLines: parseLines, optimize: optimize, pathLen: pathLen };
+  window.__tournee = { extractFromLabel: extractFromLabel, addrFromCode: addrFromCode, findStop: findStop, keyOf: keyOf, setCurrent: function(c){ current = c; }, extractAddresses: extractAddresses, parseLines: parseLines, optimize: optimize, pathLen: pathLen };
 })();
 </script>
 </body>
