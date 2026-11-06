@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tournée">
+<meta name="theme-color" content="#111418">
+<title>Tournée</title>
+<style>
+  :root{
+    --bg:#111418; --card:#1b2027; --line:#2a313b; --text:#e8ecf1; --muted:#8b96a5;
+    --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+  body{padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 24px)}
+  h1{font-size:22px;margin:4px 0 14px}
+  h2{font-size:15px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,textarea{width:100%;background:#0d1014;color:var(--text);border:1px solid var(--line);
+    border-radius:10px;padding:11px;font:inherit;font-size:16px}
+  textarea{min-height:180px;resize:vertical;font-family:ui-monospace,Menlo,monospace;font-size:14px}
+  .row{display:flex;gap:8px;align-items:center}
+  .row>*{flex:1}
+  button{appearance:none;border:0;border-radius:12px;padding:14px;font:inherit;font-weight:600;
+    background:var(--accent);color:#fff;width:100%;margin-top:12px}
+  button.sec{background:#2a313b}
+  button.small{width:auto;padding:8px 12px;margin:0;font-size:14px}
+  button:disabled{opacity:.5}
+  .hint{font-size:13px;color:var(--muted);margin-top:6px}
+  .chk{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:14px}
+  .chk input{width:auto}
+  #status{font-size:14px;color:var(--muted);margin-top:10px;min-height:20px}
+  .bar{height:6px;background:#0d1014;border-radius:6px;overflow:hidden;margin-top:8px}
+  .bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+  .stats{display:flex;gap:8px}
+  .stat{flex:1;background:#0d1014;border-radius:10px;padding:10px;text-align:center}
+  .stat b{display:block;font-size:20px}
+  .stat span{font-size:12px;color:var(--muted)}
+  .stop{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+  .stop:first-child{border-top:0}
+  .num{min-width:44px;height:44px;border-radius:10px;background:var(--accent);display:flex;
+    align-items:center;justify-content:center;font-weight:700;font-size:18px}
+  .stop.done .num{background:var(--ok)}
+  .stop.done .addr{text-decoration:line-through;color:var(--muted)}
+  .body{flex:1;min-width:0}
+  .addr{font-size:15px;word-wrap:break-word}
+  .meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .tag{display:inline-block;font-size:11px;padding:2px 6px;border-radius:6px;margin-right:4px;margin-top:4px}
+  .tag.warn{background:rgba(245,158,11,.15);color:var(--warn)}
+  .tag.bad{background:rgba(239,68,68,.15);color:var(--bad)}
+  .tag.info{background:rgba(59,130,246,.15);color:#93c5fd}
+  .links{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .links a{font-size:13px;color:var(--text);background:#2a313b;padding:6px 10px;border-radius:8px;text-decoration:none}
+  .hidden{display:none !important}
+  #scanner{position:fixed;inset:0;background:#000;z-index:10;display:flex;flex-direction:column;
+    padding:calc(env(safe-area-inset-top) + 10px) 14px calc(env(safe-area-inset-bottom) + 14px);overflow:auto}
+  #scanTitle{font-weight:700;font-size:17px;margin-bottom:8px}
+  #reader{width:100%;border-radius:12px;overflow:hidden;background:#111}
+  #reader video{width:100% !important;height:auto !important}
+  #scanBig{font-size:26px;font-weight:800;text-align:center;margin:14px 0 4px;min-height:34px}
+  #scanBig.ok{color:var(--ok)} #scanBig.bad{color:var(--warn)}
+  #scanInfo{text-align:center;color:var(--muted);font-size:14px;min-height:20px}
+  #rawBox{margin-top:10px;font-size:13px;color:var(--muted)}
+  #scanRaw{white-space:pre-wrap;word-break:break-all;background:#111;padding:8px;border-radius:8px;color:var(--text);font-size:12px}
+</style>
+</head>
+<body>
+<h1>Tournée</h1>
+
+<div class="card" id="inputCard">
+  <h2>1. Départ</h2>
+  <label for="depot">Adresse du dépôt (ou premier arrêt)</label>
+  <input id="depot" placeholder="ex : 3 rue de l'Industrie 94000 Créteil" autocomplete="off">
+  <label for="city">Code postal / ville par défaut (optionnel)</label>
+  <input id="city" placeholder="ex : 94000 Créteil" autocomplete="off">
+  <div class="hint">Ajouté aux adresses qui n'ont pas de code postal, pour éviter les erreurs de géolocalisation.</div>
+
+  <h2 style="margin-top:18px">2. Arrêts</h2>
+  <label for="photos" class="hidden" id="photosLbl">photos</label>
+  <input type="file" id="photos" accept="image/*" multiple class="hidden">
+  <div class="row">
+    <button class="sec" id="btnPhotos" style="margin-top:0">Importer des captures</button>
+    <button class="sec" id="btnClean" style="margin-top:0">Nettoyer le texte</button>
+  </div>
+  <div class="hint">Captures : fais des captures d'écran de la liste dans l'appli, sélectionne-les toutes d'un coup, l'app lit le texte et garde seulement les adresses. Tu peux aussi coller n'importe quel texte en vrac puis appuyer sur « Nettoyer ».</div>
+  <button id="btnScan" style="margin-top:8px">Scanner les colis</button>
+  <div id="ocrStatus" class="hint"></div>
+  <textarea id="stops" style="margin-top:10px" placeholder="Un arrêt par ligne. Exemples :
+64 ; 12 rue Victor Hugo 94000 Créteil
+65 - 4 avenue Foch, Créteil
+12 bd Jean Jaurès 94000 Créteil *"></textarea>
+  <div class="hint">Le numéro au début (64, 65...) est facultatif : c'est ton numéro actuel, pour faire la correspondance. Mets une * en fin de ligne pour une signature / remise en main propre.</div>
+  <label class="chk"><input type="checkbox" id="priority"> Livrer les colis * en premier</label>
+
+  <button id="go">Calculer la tournée</button>
+  <div id="status"></div>
+  <div class="bar hidden" id="bar"><div></div></div>
+</div>
+
+<div id="result" class="hidden">
+  <div class="card">
+    <h2>Résultat</h2>
+    <div class="stats">
+      <div class="stat"><b id="sStops">0</b><span>arrêts</span></div>
+      <div class="stat"><b id="sBefore">-</b><span>km ordre actuel</span></div>
+      <div class="stat"><b id="sAfter">-</b><span>km optimisé</span></div>
+    </div>
+    <div class="hint">Distances estimées (vol d'oiseau x 1,3). L'ordre est fiable, les km sont indicatifs.</div>
+    <div class="row" style="margin-top:12px">
+      <button class="sec small" id="copy">Copier la correspondance</button>
+      <button class="sec small" id="reset">Nouvelle tournée</button>
+    </div>
+    <button id="btnLoad">Mode chargement (scanner un colis)</button>
+    <div id="copyMsg" class="hint"></div>
+  </div>
+  <div class="card"><div id="list"></div></div>
+</div>
+
+<div id="scanner" class="hidden">
+  <div id="scanTitle">Scan des colis</div>
+  <div id="reader"></div>
+  <div id="scanBig">Vise un code (carré ou barres)</div>
+  <div id="scanInfo"></div>
+  <details id="rawBox"><summary>Contenu brut du dernier code</summary><pre id="scanRaw"></pre></details>
+  <button id="scanStop">Terminer</button>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var GEO = "https://data.geopf.fr/geocodage/search";
+  var $ = function(id){ return document.getElementById(id); };
+  var store = {
+    get: function(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+    set: function(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+  };
+
+  // ---------- Parsing ----------
+  function parseLines(text){
+    var out = [];
+    text.split(/\r?\n/).forEach(function(raw){
+      var line = raw.trim();
+      if(!line) return;
+      var signature = /\*\s*$/.test(line);
+      line = line.replace(/\*\s*$/, "").trim();
+      var ref = null;
+      var m = line.match(/^#?(\d{1,4})\s*[;\-–—:)|\t]\s*(.+)$/);
+      if(m){ ref = m[1]; line = m[2].trim(); }
+      out.push({ ref: ref, address: line, signature: signature });
+    });
+    return out;
+  }
+  function withCity(addr, city){
+    if(!city) return addr;
+    return /\b\d{5}\b/.test(addr) ? addr : addr + " " + city;
+  }
+
+  // ---------- Extraction d'adresses depuis un texte en vrac ----------
+  var STREET = /\b(\d{1,4}\s*(bis|ter|quater|[a-d])?\s*,?\s+)?(rue|r\.|avenue|av\.?|ave|boulevard|bd|bld|blvd|all[ée]e|chemin|ch\.|place|pl\.|impasse|imp\.?|route|rte|quai|cours|square|sq\.?|r[ée]sidence|r[ée]s\.?|voie|passage|sentier|cit[ée]|rond[- ]point|lotissement|lot\.?|chauss[ée]e|faubourg|fg|mail|promenade|villa|hameau|lieu[- ]dit|parvis|esplanade|traverse|venelle|ruelle|clos|domaine|zac|za|zi)\b/i;
+  var CP = /\b(\d{5})\b\s*([A-Za-zÀ-ÿ' \-]{2,})?/;
+  function cleanLine(l){
+    return l.replace(/[|_~•·]/g, " ").replace(/\s{2,}/g, " ").trim();
+  }
+  function extractAddresses(text){
+    var lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
+    var out = [], i = 0;
+    while(i < lines.length){
+      var l = lines[i];
+      // Format déjà propre : "64 ; adresse"
+      if(/^#?\d{1,4}\s*[;\-–—:)|]\s*\S/.test(l) && (STREET.test(l) || CP.test(l))){
+        out.push(l); i++; continue;
+      }
+      if(STREET.test(l)){
+        var addr = l, ref = null;
+        for(var b=1;b<=3 && i-b>=0;b++){
+          var pv = lines[i-b];
+          if(/^#?\d{1,4}$/.test(pv)){ ref = pv.replace("#",""); break; }
+          if(STREET.test(pv) || CP.test(pv)) break;
+        }
+        var used = 0;
+        if(!CP.test(addr)){
+          for(var k=1;k<=2 && i+k<lines.length;k++){
+            var nx = lines[i+k];
+            if(CP.test(nx) && !STREET.test(nx)){
+              addr += " " + nx.match(/\d{5}.*$/)[0]; used = k;
+              var city2 = lines[i+k+1];
+              if(/^\d{5}$/.test(nx.trim()) && city2 && /^[A-Za-zÀ-ÿ' \-]{2,}$/.test(city2)){ addr += " " + city2; used++; }
+              break;
+            }
+          }
+        }
+        var star = /\*\s*$/.test(addr) || /signature|remise en main/i.test(lines.slice(i, i+used+2).join(" "));
+        addr = addr.replace(/\*\s*$/, "").trim();
+        out.push((ref ? ref + " ; " : "") + addr + (star ? " *" : ""));
+        i += used + 1; continue;
+      }
+      i++;
+    }
+    return out;
+  }
+
+  // ---------- OCR des captures (Tesseract.js, chargé à la demande) ----------
+  var tessPromise = null;
+  function loadTesseract(){
+    if(tessPromise) return tessPromise;
+    tessPromise = new Promise(function(res, rej){
+      var s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      s.onload = function(){ res(window.Tesseract); };
+      s.onerror = function(){ tessPromise = null; rej(new Error("chargement OCR impossible")); };
+      document.head.appendChild(s);
+    });
+    return tessPromise;
+  }
+  function ocrFiles(files){
+    var st = $("ocrStatus"), texts = [];
+    st.textContent = "Préparation de la lecture (le premier lancement télécharge ~5 Mo)...";
+    var worker;
+    return loadTesseract().then(function(T){
+      return T.createWorker("fra");
+    }).then(function(w){
+      worker = w;
+      return Array.prototype.reduce.call(files, function(chain, f, idx){
+        return chain.then(function(){
+          st.textContent = "Lecture capture " + (idx+1) + "/" + files.length + "...";
+          return worker.recognize(f).then(function(r){ texts.push(r.data.text); });
+        });
+      }, Promise.resolve());
+    }).then(function(){
+      if(worker) worker.terminate();
+      var found = extractAddresses(texts.join("\n"));
+      var ta = $("stops");
+      ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + found.join("\n");
+      store.set("stopsDraft", ta.value);
+      st.textContent = found.length + " adresse(s) détectée(s). Vérifie vite la liste avant de calculer.";
+    }).catch(function(e){
+      if(worker) worker.terminate();
+      st.textContent = "Erreur de lecture : " + e.message;
+    });
+  }
+  $("btnPhotos").addEventListener("click", function(){ $("photos").click(); });
+  $("photos").addEventListener("change", function(){
+    var f = this.files;
+    if(f && f.length) ocrFiles(f).then(function(){ $("photos").value = ""; });
+  });
+  $("btnClean").addEventListener("click", function(){
+    var found = extractAddresses($("stops").value);
+    if(!found.length){ $("ocrStatus").textContent = "Aucune adresse reconnue dans le texte."; return; }
+    $("stops").value = found.join("\n");
+    store.set("stopsDraft", $("stops").value);
+    $("ocrStatus").textContent = found.length + " adresse(s) gardée(s), le reste (noms, téléphones, codes) a été retiré.";
+  });
+
+  // ---------- Scanner de codes (html5-qrcode, chargé à la demande) ----------
+  var scanner = null, scanMode = null, lastCode = "", lastAt = 0, audioCtx = null;
+  var scans = [];
+  try { scans = JSON.parse(store.get("scans") || "[]"); } catch(e){ scans = []; }
+  function saveScans(){ store.set("scans", JSON.stringify(scans)); }
+  var libPromise = null;
+  function loadScannerLib(){
+    if(libPromise) return libPromise;
+    libPromise = new Promise(function(res, rej){
+      var s = document.createElement("script");
+      s.src = "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";
+      s.onload = function(){ res(); };
+      s.onerror = function(){ libPromise = null; rej(new Error("chargement du scanner impossible")); };
+      document.head.appendChild(s);
+    });
+    return libPromise;
+  }
+  function beep(ok){
+    try {
+      if(!audioCtx) return;
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = ok ? 1250 : 380; g.gain.value = 0.2;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + (ok ? 0.12 : 0.35));
+    } catch(e){}
+  }
+  function addrFromCode(txt){
+    var t = String(txt).replace(/[\x1d\x1e\x04|;\t]+/g, "\n").replace(/ {3,}/g, "\n");
+    var f = extractAddresses(t);
+    return f[0] || null;
+  }
+  function keyOf(addr){
+    return parseLines(addr)[0].address.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/\bbd\b|\bboulevard\b/g, "bd").replace(/\bav\b|\bavenue\b/g, "av").replace(/[^a-z0-9]/g, "");
+  }
+  function scanMsg(big, cls, info){
+    var b = $("scanBig"); b.textContent = big; b.className = cls || "";
+    $("scanInfo").textContent = info || "";
+  }
+  function startScanner(mode){
+    scanMode = mode; lastCode = "";
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if(audioCtx.resume) audioCtx.resume();
+    } catch(e){}
+    $("scanner").classList.remove("hidden");
+    $("scanTitle").textContent = mode === "collect" ? "Scan des colis (ajout des adresses)" : "Mode chargement";
+    scanMsg(mode === "collect" ? "Vise un code de l'étiquette" : "Scanne un colis", "",
+            mode === "collect" ? scans.length + " colis scannés" : "");
+    loadScannerLib().then(function(){
+      var F = window.Html5QrcodeSupportedFormats;
+      scanner = new window.Html5Qrcode("reader", {
+        verbose: false,
+        formatsToSupport: [F.DATA_MATRIX, F.QR_CODE, F.CODE_128, F.PDF_417, F.AZTEC, F.CODE_39]
+      });
+      return scanner.start({ facingMode: "environment" }, {
+        fps: 12,
+        qrbox: function(w, h){ var s = Math.floor(Math.min(w, h) * 0.75); return { width: s, height: s }; }
+      }, onScan, function(){});
+    }).catch(function(e){
+      scanMsg("Caméra indisponible", "bad", (e && e.message ? e.message : String(e)) +
+        ". Autorise la caméra pour ce site dans Réglages > Safari > Appareil photo.");
+    });
+  }
+  function stopScanner(){
+    var hide = function(){ $("scanner").classList.add("hidden"); $("reader").innerHTML = ""; scanner = null; };
+    if(scanner){ scanner.stop().then(hide, hide); } else hide();
+  }
+  function onScan(text){
+    var now = Date.now();
+    if(text === lastCode && now - lastAt < 2500) return;
+    lastCode = text; lastAt = now;
+    $("scanRaw").textContent = text;
+    if(scanMode === "collect"){
+      if(scans.some(function(s){ return s.code === text; })){
+        beep(false); scanMsg("Déjà scanné", "bad", ""); return;
+      }
+      var a = addrFromCode(text);
+      if(a){
+        var ta = $("stops");
+        ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + a;
+        store.set("stopsDraft", ta.value);
+        scans.push({ code: text, key: keyOf(a) }); saveScans();
+        beep(true); scanMsg("OK  " + scans.length, "ok", parseLines(a)[0].address);
+      } else {
+        beep(false);
+        scanMsg("Pas d'adresse dans ce code", "bad", "Essaie l'autre code de l'étiquette. Ouvre « Contenu brut » pour voir ce qu'il contient.");
+      }
+    } else {
+      scanMsg("...", "", "");
+      findStop(text).then(function(r){
+        if(r){ beep(true); scanMsg("ARRÊT " + r.n, "ok", r.address); }
+        else { beep(false); scanMsg("Introuvable", "bad", "Ce code n'est relié à aucune adresse de la tournée."); }
+      });
+    }
+  }
+  function findStop(text){
+    var s = scans.filter(function(x){ return x.code === text; })[0];
+    var key = s && s.key, a = null;
+    if(!key){ a = addrFromCode(text); if(a) key = keyOf(a); }
+    if(!key) return Promise.resolve(null);
+    for(var i=0;i<current.length;i++){
+      if(current[i].items.some(function(x){ return keyOf(x.address) === key; }))
+        return Promise.resolve({ n: i+1, address: current[i].items[0].address });
+    }
+    if(!a) return Promise.resolve(null);
+    // Orthographe différente : on compare les positions GPS
+    return geocode(withCity(parseLines(a)[0].address, $("city").value.trim())).then(function(g){
+      if(!g) return null;
+      var best = -1, bd = Infinity;
+      current.forEach(function(st, j){ var d = hav(g, st); if(d < bd){ bd = d; best = j; } });
+      return bd < 0.06 ? { n: best+1, address: current[best].items[0].address } : null;
+    }).catch(function(){ return null; });
+  }
+  $("btnScan").addEventListener("click", function(){
+    if(!$("stops").value.trim()){ scans = []; saveScans(); }
+    startScanner("collect");
+  });
+  $("btnLoad").addEventListener("click", function(){ startScanner("load"); });
+  $("scanStop").addEventListener("click", stopScanner);
+
+  // ---------- Geocoding (Géoplateforme IGN) ----------
+  var cache = {};
+  try { cache = JSON.parse(store.get("geoCache") || "{}"); } catch(e){ cache = {}; }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function geocode(q){
+    var key = q.toLowerCase();
+    if(cache[key]) return Promise.resolve(cache[key]);
+    var url = GEO + "?limit=1&index=address&q=" + encodeURIComponent(q);
+    return fetch(url).then(function(r){
+      if(!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function(j){
+      var f = j.features && j.features[0];
+      if(!f) return null;
+      var res = { lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1],
+                  score: f.properties.score, label: f.properties.label };
+      cache[key] = res;
+      return res;
+    });
+  }
+
+  // ---------- Distances / optimisation ----------
+  function hav(a, b){
+    var R = 6371, toR = Math.PI/180;
+    var dLat = (b.lat-a.lat)*toR, dLon = (b.lon-a.lon)*toR;
+    var s = Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(a.lat*toR)*Math.cos(b.lat*toR)*Math.sin(dLon/2)*Math.sin(dLon/2);
+    return 2*R*Math.asin(Math.sqrt(s)) * 1.3;
+  }
+  function pathLen(pts){
+    var d = 0;
+    for(var i=1;i<pts.length;i++) d += hav(pts[i-1], pts[i]);
+    return d;
+  }
+  // Ordonne "nodes" en partant de "start" : plus proche voisin puis 2-opt (chemin ouvert).
+  function optimize(start, nodes){
+    if(nodes.length < 2) return nodes.slice();
+    var left = nodes.slice(), path = [], cur = start;
+    while(left.length){
+      var bi = 0, bd = Infinity;
+      for(var i=0;i<left.length;i++){ var d = hav(cur, left[i]); if(d < bd){ bd = d; bi = i; } }
+      cur = left.splice(bi,1)[0]; path.push(cur);
+    }
+    var p = [start].concat(path), n = p.length, improved = true, guard = 0;
+    while(improved && guard++ < 200){
+      improved = false;
+      for(var a=1;a<n-1;a++){
+        for(var b=a+1;b<n;b++){
+          var before = hav(p[a-1],p[a]) + (b+1<n ? hav(p[b],p[b+1]) : 0);
+          var after  = hav(p[a-1],p[b]) + (b+1<n ? hav(p[a],p[b+1]) : 0);
+          if(after + 1e-9 < before){
+            var seg = p.slice(a, b+1).reverse();
+            for(var k=0;k<seg.length;k++) p[a+k] = seg[k];
+            improved = true;
+          }
+        }
+      }
+    }
+    return p.slice(1);
+  }
+
+  // ---------- Rendu ----------
+  var current = [];
+  function render(){
+    var done = {};
+    try { done = JSON.parse(store.get("tourneeDone") || "{}"); } catch(e){}
+    var html = "";
+    current.forEach(function(s, i){
+      var n = i+1, isDone = !!done[n];
+      var tags = "";
+      if(s.items.length > 1) tags += '<span class="tag info">' + s.items.length + ' colis</span>';
+      if(s.items.some(function(x){return x.signature;})) tags += '<span class="tag warn">signature</span>';
+      if(s.score < 0.6) tags += '<span class="tag bad">adresse à vérifier</span>';
+      var refs = s.items.map(function(x){ return x.ref; }).filter(Boolean);
+      html += '<div class="stop' + (isDone ? ' done' : '') + '" data-n="' + n + '">' +
+        '<div class="num">' + n + '</div><div class="body">' +
+        '<div class="addr">' + esc(s.items[0].address) + '</div>' +
+        '<div class="meta">' + (refs.length ? 'ancien n° ' + refs.join(", ") + ' · ' : '') + esc(s.label) + '</div>' +
+        tags +
+        '<div class="links">' +
+          '<a href="https://maps.apple.com/?daddr=' + s.lat + ',' + s.lon + '&dirflg=d">Plans</a>' +
+          '<a href="https://waze.com/ul?ll=' + s.lat + ',' + s.lon + '&navigate=yes">Waze</a>' +
+          '<a href="#" data-toggle="' + n + '">' + (isDone ? 'Annuler' : 'Livré') + '</a>' +
+        '</div></div></div>';
+    });
+    $("list").innerHTML = html;
+  }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+
+  $("list").addEventListener("click", function(e){
+    var t = e.target.getAttribute("data-toggle");
+    if(!t) return;
+    e.preventDefault();
+    var done = {};
+    try { done = JSON.parse(store.get("tourneeDone") || "{}"); } catch(err){}
+    if(done[t]) delete done[t]; else done[t] = 1;
+    store.set("tourneeDone", JSON.stringify(done));
+    render();
+  });
+
+  // ---------- Flux principal ----------
+  $("depot").value = store.get("depot") || "";
+  $("city").value = store.get("city") || "";
+  $("stops").value = store.get("stopsDraft") || "";
+  $("stops").addEventListener("input", function(){ store.set("stopsDraft", $("stops").value); });
+
+  var saved = store.get("tournee");
+  if(saved){
+    try { current = JSON.parse(saved); showResult(JSON.parse(store.get("tourneeStats") || "{}")); } catch(e){}
+  }
+
+  function setStatus(t){ $("status").textContent = t; }
+  function setBar(p){ $("bar").classList.remove("hidden"); $("bar").firstChild.style.width = Math.round(p*100) + "%"; }
+
+  $("go").addEventListener("click", function(){
+    var depotTxt = $("depot").value.trim(), city = $("city").value.trim();
+    var items = parseLines($("stops").value);
+    if(!depotTxt){ setStatus("Renseigne l'adresse de départ."); return; }
+    if(!items.length){ setStatus("Colle au moins un arrêt."); return; }
+    store.set("depot", depotTxt); store.set("city", city);
+    $("go").disabled = true;
+
+    var depot, failed = [];
+    var queue = items.slice();
+    var total = items.length + 1, doneCount = 0;
+
+    setStatus("Localisation du départ...");
+    geocode(withCity(depotTxt, city)).then(function(d){
+      if(!d) throw new Error("Départ introuvable");
+      depot = d; doneCount++; setBar(doneCount/total);
+      return queue.reduce(function(chain, it){
+        return chain.then(function(){
+          setStatus("Localisation " + doneCount + "/" + (total-1) + "...");
+          var cached = !!cache[withCity(it.address, city).toLowerCase()];
+          return geocode(withCity(it.address, city)).then(function(g){
+            if(g){ it.lat = g.lat; it.lon = g.lon; it.score = g.score; it.label = g.label; }
+            else failed.push(it);
+          }).catch(function(){ failed.push(it); })
+            .then(function(){ doneCount++; setBar(doneCount/total); return cached ? null : sleep(80); });
+        });
+      }, Promise.resolve());
+    }).then(function(){
+      store.set("geoCache", JSON.stringify(cache));
+      var ok = items.filter(function(x){ return x.lat != null; });
+
+      // Regroupe les colis d'une même adresse
+      var groups = {}, stops = [];
+      ok.forEach(function(it){
+        var k = it.lat.toFixed(5) + "," + it.lon.toFixed(5);
+        if(!groups[k]){ groups[k] = { lat: it.lat, lon: it.lon, score: it.score, label: it.label, items: [] }; stops.push(groups[k]); }
+        groups[k].items.push(it);
+      });
+
+      // Distance de l'ordre actuel
+      var origOrder = stops.slice();
+      if(ok.every(function(x){ return x.ref; })){
+        origOrder.sort(function(a,b){
+          return Math.min.apply(null, a.items.map(function(x){return +x.ref;})) -
+                 Math.min.apply(null, b.items.map(function(x){return +x.ref;}));
+        });
+      }
+      var before = pathLen([depot].concat(origOrder));
+
+      var result;
+      if($("priority").checked){
+        var pri = stops.filter(function(s){ return s.items.some(function(x){return x.signature;}); });
+        var rest = stops.filter(function(s){ return pri.indexOf(s) < 0; });
+        var a = optimize(depot, pri);
+        result = a.concat(optimize(a.length ? a[a.length-1] : depot, rest));
+      } else {
+        result = optimize(depot, stops);
+      }
+      var after = pathLen([depot].concat(result));
+
+      current = result;
+      var stats = { before: before, after: after, failed: failed.map(function(f){ return f.address; }) };
+      store.set("tournee", JSON.stringify(current));
+      store.set("tourneeStats", JSON.stringify(stats));
+      store.set("tourneeDone", "{}");
+      showResult(stats);
+      setStatus(failed.length ? failed.length + " adresse(s) introuvable(s) : voir en bas." : "Tournée prête.");
+    }).catch(function(err){
+      setStatus("Erreur : " + err.message + ". Vérifie ta connexion et l'adresse de départ.");
+    }).then(function(){ $("go").disabled = false; });
+  });
+
+  function showResult(stats){
+    $("result").classList.remove("hidden");
+    $("inputCard").classList.add("hidden");
+    $("sStops").textContent = current.length;
+    $("sBefore").textContent = stats.before ? stats.before.toFixed(1) : "-";
+    $("sAfter").textContent = stats.after ? stats.after.toFixed(1) : "-";
+    render();
+    if(stats.failed && stats.failed.length){
+      $("list").insertAdjacentHTML("beforeend",
+        '<div class="stop"><div class="body"><div class="tag bad">Introuvables (à placer à la main)</div>' +
+        stats.failed.map(function(a){ return '<div class="addr" style="margin-top:6px">' + esc(a) + '</div>'; }).join("") +
+        '</div></div>');
+    }
+  }
+
+  $("copy").addEventListener("click", function(){
+    var txt = current.map(function(s, i){
+      var refs = s.items.map(function(x){ return x.ref; }).filter(Boolean);
+      return (i+1) + (refs.length ? " <- " + refs.join(", ") : "") + " | " + s.items[0].address;
+    }).join("\n");
+    var done = function(){ $("copyMsg").textContent = "Copié."; };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(done, function(){ fallbackCopy(txt); done(); });
+    } else { fallbackCopy(txt); done(); }
+  });
+  function fallbackCopy(t){
+    var ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand("copy"); } catch(e){} document.body.removeChild(ta);
+  }
+
+  $("reset").addEventListener("click", function(){
+    $("result").classList.add("hidden");
+    $("inputCard").classList.remove("hidden");
+    $("bar").classList.add("hidden");
+    setStatus("");
+  });
+
+  // Exposé pour les tests
+  window.__tournee = { addrFromCode: addrFromCode, findStop: findStop, keyOf: keyOf, setCurrent: function(c){ current = c; }, extractAddresses: extractAddresses, parseLines: parseLines, optimize: optimize, pathLen: pathLen };
+})();
+</script>
+</body>
+</html>
