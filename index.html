@@ -62,7 +62,9 @@
     padding:calc(env(safe-area-inset-top) + 10px) 14px calc(env(safe-area-inset-bottom) + 14px);overflow:auto}
   #scanTitle{font-weight:700;font-size:17px;margin-bottom:8px}
   #reader{width:100%;border-radius:12px;overflow:hidden;background:#111}
-  #reader video{width:100% !important;height:auto !important}
+  #reader video{width:100% !important;height:auto !important;display:block}
+  #reader{position:relative}
+  #guide{position:absolute;left:8%;right:8%;top:18%;bottom:18%;border:3px solid rgba(59,130,246,.9);border-radius:12px;pointer-events:none}
   #scanBig{font-size:26px;font-weight:800;text-align:center;margin:14px 0 4px;min-height:34px}
   #scanBig.ok{color:var(--ok)} #scanBig.bad{color:var(--warn)}
   #scanInfo{text-align:center;color:var(--muted);font-size:14px;min-height:20px}
@@ -94,7 +96,8 @@
     <option value="list">Captures de la liste dans l'appli</option>
   </select>
   <div class="hint">Étiquettes : une photo par colis, cadrée sur l'étiquette, bien à plat. Captures : fais des captures d'écran de la liste dans l'appli, sélectionne-les toutes d'un coup, l'app lit le texte et garde seulement les adresses. Tu peux aussi coller n'importe quel texte en vrac puis appuyer sur « Nettoyer ».</div>
-  <button id="btnScan" style="margin-top:8px">Scanner les colis</button>
+  <button id="btnLive" style="margin-top:8px">Lire les étiquettes à la caméra</button>
+  <button class="sec" id="btnScan" style="margin-top:8px">Scanner les codes-barres</button>
   <div id="ocrStatus" class="hint"></div>
   <div style="text-align:right;margin-top:8px"><button class="sec small" id="btnClear">Vider la liste</button></div>
   <textarea id="stops" style="margin-top:6px" placeholder="Un arrêt par ligne. Exemples :
@@ -122,7 +125,8 @@
       <button class="sec small" id="copy">Copier la correspondance</button>
       <button class="sec small" id="reset">Nouvelle tournée</button>
     </div>
-    <button id="btnLoad">Mode chargement (scanner un colis)</button>
+    <button id="btnLoadLive">Mode chargement (lire l'étiquette)</button>
+    <button class="sec" id="btnLoad">Mode chargement (code-barres)</button>
     <div id="copyMsg" class="hint"></div>
   </div>
   <div class="card"><div id="list"></div></div>
@@ -138,7 +142,8 @@
     <div class="row"><button id="manualOk" style="margin-top:8px">Valider</button><button class="sec" id="manualSkip" style="margin-top:8px">Passer</button></div>
   </div>
   <details id="rawBox"><summary>Contenu brut du dernier code</summary><pre id="scanRaw"></pre></details>
-  <button id="scanStop">Terminer</button>
+  <button id="liveShot" class="hidden">Capturer maintenant</button>
+  <button class="sec" id="scanStop">Terminer</button>
 </div>
 
 <script>
@@ -396,9 +401,111 @@
   }
   function stopScanner(){
     closeManual();
+    liveOn = false;
+    if(liveStream){ liveStream.getTracks().forEach(function(t){ t.stop(); }); liveStream = null; }
+    $("liveShot").classList.add("hidden");
     var hide = function(){ $("scanner").classList.add("hidden"); $("reader").innerHTML = ""; scanner = null; };
     if(scanner){ scanner.stop().then(hide, hide); } else hide();
   }
+
+  // ---------- Lecture directe des étiquettes à la caméra (sans code-barres) ----------
+  var liveOn = false, liveStream = null, liveLastKey = null, liveCand = null, liveForce = false;
+  function startLive(mode){
+    scanMode = mode || "live"; liveOn = true; liveLastKey = null; liveCand = null;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if(audioCtx.resume) audioCtx.resume();
+    } catch(e){}
+    $("scanner").classList.remove("hidden");
+    $("liveShot").classList.remove("hidden");
+    $("scanTitle").textContent = scanMode === "liveLoad" ? "Chargement : lecture des étiquettes" : "Lecture des étiquettes";
+    scanMsg("Cadre l'étiquette dans le rectangle", "", scans.length + " colis ajoutés");
+    $("reader").innerHTML = '<video id="liveVideo" autoplay playsinline muted></video><div id="guide"></div>';
+    navigator.mediaDevices.getUserMedia({ audio: false,
+      video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } })
+    .then(function(stream){
+      liveStream = stream;
+      var v = $("liveVideo"); v.srcObject = stream;
+      return v.play();
+    }).then(function(){
+      scanMsg("Chargement de la lecture...", "", "La 1re fois, environ 5 Mo à télécharger");
+      return getOcrWorker();
+    }).then(function(){
+      scanMsg("Cadre l'étiquette dans le rectangle", "", scans.length + " colis ajoutés");
+      liveLoop();
+    }).catch(function(e){
+      scanMsg("Caméra indisponible", "bad", (e && e.message ? e.message : String(e)) +
+        ". Autorise la caméra dans Réglages > Safari > Appareil photo.");
+    });
+  }
+  // Découpe la zone du rectangle, réduit la taille et passe en noir et blanc
+  function grabLiveFrame(){
+    var v = $("liveVideo");
+    if(!v || !v.videoWidth) return null;
+    var sx = v.videoWidth * 0.08, sy = v.videoHeight * 0.18;
+    var sw = v.videoWidth * 0.84, sh = v.videoHeight * 0.64;
+    var scale = Math.min(1, 1600 / sw);
+    var cv = document.createElement("canvas"); cv.width = Math.round(sw*scale); cv.height = Math.round(sh*scale);
+    var ctx = cv.getContext("2d"); ctx.drawImage(v, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    var img = ctx.getImageData(0, 0, cv.width, cv.height), d = img.data;
+    for(var i=0;i<d.length;i+=4){
+      var g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      g = g > 150 ? 255 : (g < 90 ? 0 : (g - 90) * 255 / 60);
+      d[i] = d[i+1] = d[i+2] = g;
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv;
+  }
+  function liveLoop(){
+    if(!liveOn) return;
+    if(busy){ setTimeout(liveLoop, 400); return; }
+    var frame = grabLiveFrame();
+    if(!frame){ setTimeout(liveLoop, 400); return; }
+    getOcrWorker().then(function(w){ return w.recognize(frame); }).then(function(r){
+      if(!liveOn) return;
+      var a = extractFromLabel(r.data.text);
+      var force = liveForce; liveForce = false;
+      if(!a){
+        liveCand = null;
+        if(force){ beep(false); scanMsg("Rien lu", "bad", "Rapproche l'étiquette, à plat, bien éclairée."); }
+        return;
+      }
+      var k = keyOf(a);
+      if(scanMode === "liveLoad"){
+        if(k === liveLastKey && !force) return;
+        busy = true;
+        return findStopByAddr(a).then(function(res){
+          busy = false; liveLastKey = k;
+          if(res){ beep(true); scanMsg("ARRÊT " + res.n, "ok", res.address); }
+          else { beep(false); scanMsg("Pas dans la tournée", "bad", parseLines(a)[0].address); }
+        });
+      }
+      if(k === liveLastKey) { scanMsg("Déjà ajouté", "", "Passe au colis suivant"); return; }
+      if(scans.some(function(s){ return s.key === k; }) && !force){
+        scanMsg("Déjà ajouté", "", parseLines(a)[0].address + " (appuie sur Capturer si c'est un 2e colis)"); return;
+      }
+      // Ajout auto quand deux lectures de suite donnent la même adresse, ou tout de suite sur "Capturer"
+      if(force || (liveCand && liveCand.k === k)){
+        addStop("live:" + Date.now(), a);
+        liveLastKey = k; liveCand = null;
+      } else {
+        liveCand = { k: k, a: a };
+        scanMsg("Lecture...", "", parseLines(a)[0].address);
+      }
+    }).catch(function(){}).then(function(){ if(liveOn) setTimeout(liveLoop, 250); });
+  }
+  $("liveShot").addEventListener("click", function(){
+    if(scanMode === "liveLoad"){ liveLastKey = null; liveForce = true; return; }
+    if(liveCand && !busy){
+      addStop("live:" + Date.now(), liveCand.a);
+      liveLastKey = liveCand.k; liveCand = null;
+    } else { liveForce = true; scanMsg("Capture...", "", ""); }
+  });
+  $("btnLoadLive").addEventListener("click", function(){ startLive("liveLoad"); });
+  $("btnLive").addEventListener("click", function(){
+    if(!$("stops").value.trim()){ scans = []; saveScans(); }
+    startLive();
+  });
   // Photo de l'étiquette prise au moment du scan, pour lire l'adresse quand le code n'en contient pas
   var ocrWorkerP = null, busy = false, pendingCode = null;
   function getOcrWorker(){
