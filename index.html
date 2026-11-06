@@ -133,6 +133,10 @@
   <div id="reader"></div>
   <div id="scanBig">Vise un code (carré ou barres)</div>
   <div id="scanInfo"></div>
+  <div id="manualBox" class="hidden" style="margin-top:10px">
+    <input id="manualAddr" placeholder="Tape l'adresse de ce colis" autocomplete="off">
+    <div class="row"><button id="manualOk" style="margin-top:8px">Valider</button><button class="sec" id="manualSkip" style="margin-top:8px">Passer</button></div>
+  </div>
   <details id="rawBox"><summary>Contenu brut du dernier code</summary><pre id="scanRaw"></pre></details>
   <button id="scanStop">Terminer</button>
 </div>
@@ -382,7 +386,8 @@
       });
       return scanner.start({ facingMode: "environment" }, {
         fps: 12,
-        qrbox: function(w, h){ var s = Math.floor(Math.min(w, h) * 0.75); return { width: s, height: s }; }
+        qrbox: function(w, h){ var s = Math.floor(Math.min(w, h) * 0.75); return { width: s, height: s }; },
+        videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
       }, onScan, function(){});
     }).catch(function(e){
       scanMsg("Caméra indisponible", "bad", (e && e.message ? e.message : String(e)) +
@@ -390,11 +395,63 @@
     });
   }
   function stopScanner(){
+    closeManual();
     var hide = function(){ $("scanner").classList.add("hidden"); $("reader").innerHTML = ""; scanner = null; };
     if(scanner){ scanner.stop().then(hide, hide); } else hide();
   }
+  // Photo de l'étiquette prise au moment du scan, pour lire l'adresse quand le code n'en contient pas
+  var ocrWorkerP = null, busy = false, pendingCode = null;
+  function getOcrWorker(){
+    if(!ocrWorkerP) ocrWorkerP = loadTesseract().then(function(T){ return T.createWorker("fra"); })
+      .catch(function(e){ ocrWorkerP = null; throw e; });
+    return ocrWorkerP;
+  }
+  function grabFrame(){
+    var v = document.querySelector("#reader video");
+    if(!v || !v.videoWidth) return null;
+    var cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight;
+    var ctx = cv.getContext("2d"); ctx.drawImage(v, 0, 0);
+    var img = ctx.getImageData(0, 0, cv.width, cv.height), d = img.data;
+    for(var i=0;i<d.length;i+=4){
+      var g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      g = g > 150 ? 255 : (g < 90 ? 0 : (g - 90) * 255 / 60);
+      d[i] = d[i+1] = d[i+2] = g;
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv;
+  }
+  function readLabelNow(){
+    var frame = grabFrame();
+    if(!frame) return Promise.resolve(null);
+    return getOcrWorker().then(function(w){ return w.recognize(frame); })
+      .then(function(r){ return extractFromLabel(r.data.text); })
+      .catch(function(){ return null; });
+  }
+  function addStop(code, a){
+    var ta = $("stops");
+    ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + a;
+    store.set("stopsDraft", ta.value);
+    scans.push({ code: code, key: keyOf(a), addr: a }); saveScans();
+    beep(true); scanMsg("OK  " + scans.length, "ok", parseLines(a)[0].address);
+  }
+  function askManual(code){
+    pendingCode = code;
+    $("manualBox").classList.remove("hidden");
+    $("manualAddr").value = "";
+  }
+  function closeManual(){ pendingCode = null; $("manualBox").classList.add("hidden"); busy = false; }
+  $("manualOk").addEventListener("click", function(){
+    var v = $("manualAddr").value.trim();
+    if(!v || !pendingCode) return;
+    var city = $("city").value.trim();
+    addStop(pendingCode, withCity(v, city));
+    closeManual();
+  });
+  $("manualSkip").addEventListener("click", function(){ scanMsg("Colis passé", "", ""); closeManual(); });
+
   function onScan(text){
     var now = Date.now();
+    if(busy) return;
     if(text === lastCode && now - lastAt < 2500) return;
     lastCode = text; lastAt = now;
     $("scanRaw").textContent = text;
@@ -403,26 +460,49 @@
         beep(false); scanMsg("Déjà scanné", "bad", ""); return;
       }
       var a = addrFromCode(text);
-      if(a){
-        var ta = $("stops");
-        ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + a;
-        store.set("stopsDraft", ta.value);
-        scans.push({ code: text, key: keyOf(a) }); saveScans();
-        beep(true); scanMsg("OK  " + scans.length, "ok", parseLines(a)[0].address);
-      } else {
-        beep(false);
-        scanMsg("Pas d'adresse dans ce code", "bad", "Essaie l'autre code de l'étiquette. Ouvre « Contenu brut » pour voir ce qu'il contient.");
-      }
+      if(a){ addStop(text, a); return; }
+      // Le code ne contient pas l'adresse : on lit l'étiquette
+      busy = true;
+      scanMsg("Lecture de l'étiquette...", "", "Ne bouge pas le colis");
+      readLabelNow().then(function(found){
+        if(found){ addStop(text, found); busy = false; }
+        else {
+          beep(false);
+          scanMsg("Adresse illisible", "bad", "Tape-la ci-dessous, ou appuie sur Passer et rescanne en rapprochant l'étiquette.");
+          askManual(text);
+        }
+      });
     } else {
+      busy = true;
       scanMsg("...", "", "");
       findStop(text).then(function(r){
+        if(r) return r;
+        // Code inconnu (autre code de l'étiquette) : on lit l'adresse sur l'étiquette
+        scanMsg("Lecture de l'étiquette...", "", "Ne bouge pas le colis");
+        return readLabelNow().then(function(found){ return found ? findStopByAddr(found) : null; });
+      }).then(function(r){
         if(r){ beep(true); scanMsg("ARRÊT " + r.n, "ok", r.address); }
-        else { beep(false); scanMsg("Introuvable", "bad", "Ce code n'est relié à aucune adresse de la tournée."); }
+        else { beep(false); scanMsg("Introuvable", "bad", "Rescanne le même code qu'à l'ajout, ou rapproche l'étiquette."); }
+        busy = false;
       });
     }
   }
+  function findStopByAddr(a){
+    var key = keyOf(a);
+    for(var i=0;i<current.length;i++){
+      if(current[i].items.some(function(x){ return keyOf(x.address) === key; }))
+        return Promise.resolve({ n: i+1, address: current[i].items[0].address });
+    }
+    return geocode(withCity(parseLines(a)[0].address, $("city").value.trim())).then(function(g){
+      if(!g) return null;
+      var best = -1, bd = Infinity;
+      current.forEach(function(st, j){ var d = hav(g, st); if(d < bd){ bd = d; best = j; } });
+      return bd < 0.06 ? { n: best+1, address: current[best].items[0].address } : null;
+    }).catch(function(){ return null; });
+  }
   function findStop(text){
     var s = scans.filter(function(x){ return x.code === text; })[0];
+    if(s && s.addr) return findStopByAddr(s.addr);
     var key = s && s.key, a = null;
     if(!key){ a = addrFromCode(text); if(a) key = keyOf(a); }
     if(!key) return Promise.resolve(null);
