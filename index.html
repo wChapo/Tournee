@@ -250,7 +250,7 @@ async function geocode(q, { limit = 1, autocomplete = false } = {}){
       const a = f.properties, street = [a.housenumber, a.street || a.name].filter(Boolean).join(" ");
       const city = a.city || a.locality;
       // la ville ou le code postal tapés doivent correspondre, sinon l'adresse est signalée « à vérifier »
-      const match = (city && nq.includes(norm(city))) || (a.postcode && nq.includes(a.postcode));
+      const match = ((city && nq.includes(norm(city))) || (a.postcode && nq.includes(a.postcode))) && (!a.street || nq.includes(norm(a.street)));
       return {
         label: [street, [a.postcode, city].filter(Boolean).join(" ")].filter(Boolean).join(", "),
         score: !match ? 0.4 : (wantsNumber && !a.housenumber ? 0.5 : 0.75),
@@ -320,14 +320,15 @@ $("bulkBtn").onclick = async () => {
   if (!lines.length) return toast("Colle au moins une adresse");
   busy(true, "Recherche des adresses… 0/" + lines.length);
   let ok = 0, bad = 0, i = 0;
-  // 4 requêtes en parallèle : rapide sans saturer le service
+  // 2 requêtes en parallèle : rapide sans saturer le service
   const queue = lines.slice();
   async function worker(){
     while (queue.length) {
       const q = queue.shift();
       const st = { id: uid(), raw: q, label: q, lat: null, lon: null, score: 0, note: "", status: "todo" };
       try {
-        const [r] = await geocode(q);
+        let r;
+        try { [r] = await geocode(q); } catch (e) { await new Promise(w => setTimeout(w, 1200)); [r] = await geocode(q); } // 2e essai
         if (r) { Object.assign(st, { label: r.label, lat: r.lat, lon: r.lon, score: r.score }); ok++; }
         else { st.err = "introuvable"; bad++; }
       } catch (e) { st.err = "erreur réseau"; bad++; }
@@ -335,7 +336,7 @@ $("bulkBtn").onclick = async () => {
       busy(true, "Recherche des adresses… " + (++i) + "/" + lines.length);
     }
   }
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  await Promise.all([worker(), worker()]);
   busy(false); $("bulk").value = ""; invalidate(); save(); render();
   toast(ok + " adresse(s) trouvée(s)" + (bad ? ", " + bad + " à corriger" : ""), 3500);
 };
@@ -414,6 +415,7 @@ function nearest(M, n, noise){
   while (left.size) {
     let best = -1, bc = Infinity;
     for (const j of left) { const c = M[cur][j] * (noise ? 1 + Math.random() * noise : 1); if (c < bc) { bc = c; best = j; } }
+    if (best < 0) best = left.values().next().value; // sécurité si la matrice contient des valeurs invalides
     t.push(best); left.delete(best); cur = best;
   }
   return t;
