@@ -273,7 +273,7 @@ function autocomplete(input, box, onPick){
   input.addEventListener("input", () => {
     clearTimeout(t);
     const q = input.value.trim();
-    if (q.length < 4) { box.innerHTML = ""; return; }
+    if (q.length < 6) { box.innerHTML = ""; return; }
     t = setTimeout(async () => {
       const my = ++seq;
       try {
@@ -281,15 +281,15 @@ function autocomplete(input, box, onPick){
         if (my !== seq) return;
         box.innerHTML = res.length ? '<div class="sug">' + res.map((r, i) => `<div data-i="${i}">${esc(r.label)}</div>`).join("") + "</div>" : "";
         box.querySelectorAll("[data-i]").forEach(d => d.onclick = () => { onPick(res[+d.dataset.i], q); input.value = ""; box.innerHTML = ""; });
-      } catch (e) { box.innerHTML = '<div class="err">Pas de connexion au service d\'adresses.</div>'; }
-    }, 280);
+      } catch (e) { box.innerHTML = '<div class="small muted" style="margin-top:6px">Suggestions indisponibles pour l\'instant : tape l\'adresse complète puis appuie sur Entrée.</div>'; }
+    }, 500);
   });
   input.addEventListener("keydown", async e => {
     if (e.key !== "Enter") return;
     e.preventDefault();
     const q = input.value.trim(); if (!q) return;
-    try { const [r] = await geocode(q); if (r) { onPick(r, q); input.value = ""; box.innerHTML = ""; } else toast("Adresse introuvable"); }
-    catch (err) { toast("Pas de connexion au service d'adresses"); }
+    try { const [r] = await geocodeRetry(q); if (r) { onPick(r, q); input.value = ""; box.innerHTML = ""; } else toast("Adresse introuvable"); }
+    catch (err) { toast(navigator.onLine ? "Service d'adresses saturé, réessaie dans quelques secondes" : "Pas de réseau sur le téléphone"); }
   });
 }
 
@@ -377,7 +377,7 @@ async function fixStop(id){
     if (!r) return toast("Toujours introuvable. Ajoute le code postal.");
     Object.assign(st, { raw: q, label: r.label, lat: r.lat, lon: r.lon, score: r.score, err: null });
     invalidate(); save(); render();
-  } catch (e) { toast("Pas de connexion"); }
+  } catch (e) { toast(navigator.onLine ? "Service d'adresses saturé, réessaie dans quelques secondes" : "Pas de réseau sur le téléphone"); }
 }
 function noteStop(id){
   const st = S.stops.find(s => s.id === id); if (!st) return;
