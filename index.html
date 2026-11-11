@@ -237,30 +237,54 @@ async function geocode(q, { limit = 1, autocomplete = false } = {}){
     }
     geoDownUntil = Date.now() + 5 * 60e3; // panne : on passe en secours pendant 5 min
   }
+  const errs = [];
+  if (lastErr) ignErr = "IGN " + errCode(lastErr);
+  if (ignErr && Date.now() <= geoDownUntil) errs.push(ignErr);
+  const norm = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const nq = norm(q), wantsNumber = /^\s*\d/.test(q);
+  // la ville ou le code postal tapés doivent correspondre, sinon l'adresse est signalée « à vérifier »
+  const rate = (num, street, city, postcode) => {
+    const match = ((city && nq.includes(norm(city))) || (postcode && nq.includes(postcode))) && (!street || nq.includes(norm(street)));
+    return !match ? 0.4 : (wantsNumber && !num ? 0.5 : 0.75);
+  };
+  const mk = (num, street, city, postcode, lat, lon) => ({
+    label: [[num, street].filter(Boolean).join(" "), [postcode, city].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+    score: rate(num, street, city, postcode), lat: +lat, lon: +lon
+  });
   // 2) Secours : Photon (OpenStreetMap), limité à la France
-  try {
-    const ph = new URLSearchParams({ q, limit: String(Math.max(limit, 8)), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
-    if (S.depot) { ph.set("lat", S.depot.lat); ph.set("lon", S.depot.lon); }
-    const r = await fetchT("https://photon.komoot.io/api/?" + ph.toString(), 8000);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const j = await r.json();
-    const norm = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    const nq = norm(q), wantsNumber = /^\s*\d/.test(q);
-    const res = (j.features || []).map(f => {
-      const a = f.properties, street = [a.housenumber, a.street || a.name].filter(Boolean).join(" ");
-      const city = a.city || a.locality;
-      // la ville ou le code postal tapés doivent correspondre, sinon l'adresse est signalée « à vérifier »
-      const match = ((city && nq.includes(norm(city))) || (a.postcode && nq.includes(a.postcode))) && (!a.street || nq.includes(norm(a.street)));
-      return {
-        label: [street, [a.postcode, city].filter(Boolean).join(" ")].filter(Boolean).join(", "),
-        score: !match ? 0.4 : (wantsNumber && !a.housenumber ? 0.5 : 0.75),
-        lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1]
-      };
-    });
-    return res.sort((x, y) => y.score - x.score).slice(0, limit);
-  } catch (e) { lastErr = e; }
-  throw lastErr || new Error("géocodage indisponible");
+  if (Date.now() > photonDownUntil) {
+    try {
+      const ph = new URLSearchParams({ q, limit: String(Math.max(limit, 8)), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
+      if (S.depot) { ph.set("lat", S.depot.lat); ph.set("lon", S.depot.lon); }
+      const r = await fetchT("https://photon.komoot.io/api/?" + ph.toString(), 8000);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      const res = (j.features || []).map(f => { const a = f.properties;
+        return mk(a.housenumber, a.street || a.name, a.city || a.locality, a.postcode, f.geometry.coordinates[1], f.geometry.coordinates[0]); });
+      return res.sort((x, y) => y.score - x.score).slice(0, limit);
+    } catch (e) { photonErr = "Photon " + errCode(e); photonDownUntil = Date.now() + 60e3; }
+  }
+  if (photonErr && Date.now() <= photonDownUntil) errs.push(photonErr);
+  // 3) Dernier secours : Nominatim (OpenStreetMap), 1 requête/s max, jamais pour les suggestions
+  if (!autocomplete) {
+    try {
+      const wait = 1100 - (Date.now() - lastNominatim);
+      if (wait > 0) await new Promise(w => setTimeout(w, wait));
+      lastNominatim = Date.now();
+      const nm = new URLSearchParams({ q, format: "jsonv2", addressdetails: "1", countrycodes: "fr", limit: String(Math.max(limit, 5)), "accept-language": "fr" });
+      if (S.depot) nm.set("viewbox", [S.depot.lon - 0.5, S.depot.lat + 0.5, S.depot.lon + 0.5, S.depot.lat - 0.5].join(","));
+      const r = await fetchT("https://nominatim.openstreetmap.org/search?" + nm.toString(), 10000);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      const res = j.map(f => { const a = f.address || {};
+        return mk(a.house_number, a.road || a.pedestrian || a.hamlet || f.name, a.city || a.town || a.village || a.municipality, a.postcode, f.lat, f.lon); });
+      return res.sort((x, y) => y.score - x.score).slice(0, limit);
+    } catch (e) { errs.push("OSM " + errCode(e)); }
+  }
+  throw new Error(errs.join(" · ") || "géocodage indisponible");
 }
+function errCode(e){ return e && e.name === "AbortError" ? "délai" : (/^HTTP/.test(e && e.message) ? e.message.slice(5) : "bloqué"); }
+let photonDownUntil = 0, lastNominatim = 0, ignErr = "", photonErr = "";
 let geoDownUntil = 0;
 function fetchT(url, ms){
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
@@ -289,7 +313,7 @@ function autocomplete(input, box, onPick){
     e.preventDefault();
     const q = input.value.trim(); if (!q) return;
     try { const [r] = await geocodeRetry(q); if (r) { onPick(r, q); input.value = ""; box.innerHTML = ""; } else toast("Adresse introuvable"); }
-    catch (err) { toast(navigator.onLine ? "Service d'adresses saturé, réessaie dans quelques secondes" : "Pas de réseau sur le téléphone"); }
+    catch (err) { toast(navigator.onLine ? "Services d'adresses indisponibles (" + err.message + "), réessaie dans un instant" : "Pas de réseau sur le téléphone", 5000); }
   });
 }
 
@@ -377,7 +401,7 @@ async function fixStop(id){
     if (!r) return toast("Toujours introuvable. Ajoute le code postal.");
     Object.assign(st, { raw: q, label: r.label, lat: r.lat, lon: r.lon, score: r.score, err: null });
     invalidate(); save(); render();
-  } catch (e) { toast(navigator.onLine ? "Service d'adresses saturé, réessaie dans quelques secondes" : "Pas de réseau sur le téléphone"); }
+  } catch (e) { toast(navigator.onLine ? "Services d'adresses indisponibles (" + e.message + "), réessaie dans un instant" : "Pas de réseau sur le téléphone", 5000); }
 }
 function noteStop(id){
   const st = S.stops.find(s => s.id === id); if (!st) return;
