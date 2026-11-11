@@ -320,7 +320,7 @@ $("bulkBtn").onclick = async () => {
   if (!lines.length) return toast("Colle au moins une adresse");
   busy(true, "Recherche des adresses… 0/" + lines.length);
   let ok = 0, bad = 0, i = 0;
-  // 2 requêtes en parallèle : rapide sans saturer le service
+  // une requête à la fois, espacées : plus lent mais fiable
   const queue = lines.slice();
   async function worker(){
     while (queue.length) {
@@ -328,18 +328,43 @@ $("bulkBtn").onclick = async () => {
       const st = { id: uid(), raw: q, label: q, lat: null, lon: null, score: 0, note: "", status: "todo" };
       try {
         let r;
-        try { [r] = await geocode(q); } catch (e) { await new Promise(w => setTimeout(w, 1200)); [r] = await geocode(q); } // 2e essai
+        [r] = await geocodeRetry(q);
         if (r) { Object.assign(st, { label: r.label, lat: r.lat, lon: r.lon, score: r.score }); ok++; }
         else { st.err = "introuvable"; bad++; }
       } catch (e) { st.err = "erreur réseau"; bad++; }
       S.stops.push(st);
       busy(true, "Recherche des adresses… " + (++i) + "/" + lines.length);
+      await new Promise(w => setTimeout(w, 250)); // espace les requêtes pour ne pas saturer le service
     }
   }
-  await Promise.all([worker(), worker()]);
+  await worker();
   busy(false); $("bulk").value = ""; invalidate(); save(); render();
   toast(ok + " adresse(s) trouvée(s)" + (bad ? ", " + bad + " à corriger" : ""), 3500);
 };
+
+/* Géocodage avec 3 essais (1,5 s puis 3 s d'attente) */
+async function geocodeRetry(q){
+  for (let k = 0; ; k++) {
+    try { return await geocode(q); }
+    catch (e) { if (k >= 2) throw e; await new Promise(w => setTimeout(w, 1500 * (k + 1))); }
+  }
+}
+async function retryErrors(){
+  const list = S.stops.filter(s => s.err === "erreur réseau");
+  if (!list.length) return;
+  let ok = 0, i = 0;
+  for (const st of list) {
+    busy(true, "Nouvel essai… " + (++i) + "/" + list.length);
+    try {
+      const [r] = await geocodeRetry(st.raw);
+      if (r) { Object.assign(st, { label: r.label, lat: r.lat, lon: r.lon, score: r.score, err: null }); ok++; }
+      else st.err = "introuvable";
+    } catch (e) {}
+    await new Promise(w => setTimeout(w, 300));
+  }
+  busy(false); invalidate(); save(); render();
+  toast(ok + " / " + list.length + " adresse(s) retrouvée(s)", 3500);
+}
 
 function invalidate(){ S.route = null; S.startedAt = null; }
 
@@ -544,7 +569,8 @@ function render(){
   $("pill").textContent = n + (n > 1 ? " arrêts" : " arrêt");
   $("stopsTitle").textContent = "Arrêts (" + n + ")";
   if (!n) { $("stopsCard").innerHTML = '<div class="small muted">Aucun arrêt pour l\'instant.</div>'; return; }
-  $("stopsCard").innerHTML = S.stops.map((s, i) => `
+  const nErr = S.stops.filter(s => s.err === "erreur réseau").length;
+  $("stopsCard").innerHTML = (nErr ? `<button class="btn-main" style="margin-bottom:10px" onclick="retryErrors()">Réessayer les ${nErr} adresse(s) en erreur</button>` : "") + S.stops.map((s, i) => `
     <div class="stop">
       <div class="num">${i + 1}</div>
       <div class="grow">
