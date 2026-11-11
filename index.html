@@ -222,18 +222,44 @@ async function geocode(q, { limit = 1, autocomplete = false } = {}){
   if (autocomplete) p.set("autocomplete", "1");
   if (S.depot) { p.set("lat", S.depot.lat); p.set("lon", S.depot.lon); } // priorise les résultats proches du dépôt
   let lastErr;
-  for (const base of GEO_URLS) {
-    try {
-      const r = await fetch(base + "?" + p.toString());
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const j = await r.json();
-      return (j.features || []).map(f => ({
-        label: f.properties.label, score: f.properties.score,
-        lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1]
-      }));
-    } catch (e) { lastErr = e; }
+  // 1) Base adresse officielle (IGN), sauf si elle vient d'échouer
+  if (Date.now() > geoDownUntil) {
+    for (const base of GEO_URLS) {
+      try {
+        const r = await fetchT(base + "?" + p.toString(), 6000);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        return (j.features || []).map(f => ({
+          label: f.properties.label, score: f.properties.score,
+          lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1]
+        }));
+      } catch (e) { lastErr = e; }
+    }
+    geoDownUntil = Date.now() + 5 * 60e3; // panne : on passe en secours pendant 5 min
   }
+  // 2) Secours : Photon (OpenStreetMap), limité à la France
+  try {
+    const ph = new URLSearchParams({ q, limit: String(limit), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
+    if (S.depot) { ph.set("lat", S.depot.lat); ph.set("lon", S.depot.lon); }
+    const r = await fetchT("https://photon.komoot.io/api/?" + ph.toString(), 8000);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const wantsNumber = /^\s*\d/.test(q);
+    return (j.features || []).map(f => {
+      const a = f.properties, street = [a.housenumber, a.street || a.name].filter(Boolean).join(" ");
+      return {
+        label: [street, [a.postcode, a.city || a.locality].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+        score: wantsNumber && !a.housenumber ? 0.5 : 0.75,
+        lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1]
+      };
+    });
+  } catch (e) { lastErr = e; }
   throw lastErr || new Error("géocodage indisponible");
+}
+let geoDownUntil = 0;
+function fetchT(url, ms){
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(t));
 }
 
 /* Autocomplétion réutilisable */
