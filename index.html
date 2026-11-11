@@ -575,7 +575,7 @@ function render(){
       <div class="num">${i + 1}</div>
       <div class="grow">
         <div class="addr">${esc(s.label)}</div>
-        ${s.err ? `<div class="err">Adresse ${esc(s.err)} : « ${esc(s.raw)} »</div>` : (s.score < 0.6 ? `<div class="warn">À vérifier (saisi : « ${esc(s.raw)} »)</div>` : "")}
+        ${s.err ? `<div class="err">Adresse ${esc(s.err)} : « ${esc(s.raw)} »</div>` : (s.score < 0.45 ? `<div class="warn">À vérifier : ville ou rue différente (saisi : « ${esc(s.raw)} »)</div>` : s.score < 0.6 ? `<div class="small muted">Position approximative : numéro non trouvé sur la carte, ordre de passage fiable</div>` : "")}
         ${s.note ? `<div class="small muted">${esc(s.note)}</div>` : ""}
         <div class="row" style="margin-top:6px;gap:6px">
           <button class="btn-sm" onclick="fixStop('${s.id}')">Corriger</button>
