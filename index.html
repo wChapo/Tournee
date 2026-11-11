@@ -217,13 +217,25 @@ function show(v){
 }
 
 /* ---------- Géocodage ---------- */
+const MAX_KM = 50; // au-delà, un résultat est sûrement un homonyme dans une autre région
+const farKm = r => S.depot ? hav(S.depot, r) : 0;
 async function geocode(q, { limit = 1, autocomplete = false } = {}){
+  let res = await geocodeRaw(q, { limit: Math.max(limit, 5), autocomplete });
+  // tout est loin : on tente OpenStreetMap (Nominatim) avant d'abandonner
+  if (S.depot && !autocomplete && res.every(r => farKm(r) > MAX_KM)) {
+    try { const alt = await geocodeRaw(q, { limit: 5, osmOnly: true }); if (alt.some(r => farKm(r) <= MAX_KM)) res = alt; } catch (e) {}
+  }
+  // on garde en priorité les résultats proches du dépôt ; un résultat lointain reste signalé « à vérifier »
+  res.forEach(r => { if (farKm(r) > MAX_KM) r.score = Math.min(r.score, 0.3); });
+  return res.sort((x, y) => (farKm(x) > MAX_KM) - (farKm(y) > MAX_KM) || y.score - x.score).slice(0, limit);
+}
+async function geocodeRaw(q, { limit = 1, autocomplete = false, osmOnly = false } = {}){
   const p = new URLSearchParams({ q, limit: String(limit) });
   if (autocomplete) p.set("autocomplete", "1");
   if (S.depot) { p.set("lat", S.depot.lat); p.set("lon", S.depot.lon); } // priorise les résultats proches du dépôt
   let lastErr;
   // 1) Base adresse officielle (IGN), sauf si elle vient d'échouer
-  if (Date.now() > geoDownUntil) {
+  if (!osmOnly && Date.now() > geoDownUntil) {
     for (const base of GEO_URLS) {
       try {
         const r = await fetchT(base + "?" + p.toString(), 6000);
@@ -252,7 +264,7 @@ async function geocode(q, { limit = 1, autocomplete = false } = {}){
     score: rate(num, street, city, postcode), lat: +lat, lon: +lon
   });
   // 2) Secours : Photon (OpenStreetMap), limité à la France
-  if (Date.now() > photonDownUntil) {
+  if (!osmOnly && Date.now() > photonDownUntil) {
     try {
       const ph = new URLSearchParams({ q, limit: String(Math.max(limit, 8)), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
       if (S.depot) { ph.set("lat", S.depot.lat); ph.set("lon", S.depot.lon); }
@@ -374,14 +386,14 @@ async function geocodeRetry(q){
   }
 }
 async function retryErrors(){
-  const list = S.stops.filter(s => s.err === "erreur réseau");
+  const list = S.stops.filter(s => s.err === "erreur réseau" || (!s.err && s.lat != null && farKm(s) > MAX_KM));
   if (!list.length) return;
   let ok = 0, i = 0;
   for (const st of list) {
     busy(true, "Nouvel essai… " + (++i) + "/" + list.length);
     try {
       const [r] = await geocodeRetry(st.raw);
-      if (r) { Object.assign(st, { label: r.label, lat: r.lat, lon: r.lon, score: r.score, err: null }); ok++; }
+      if (r) { Object.assign(st, { label: r.label, lat: r.lat, lon: r.lon, score: r.score, err: null }); if (farKm(r) <= MAX_KM) ok++; }
       else st.err = "introuvable";
     } catch (e) {}
     await new Promise(w => setTimeout(w, 300));
@@ -593,13 +605,13 @@ function render(){
   $("pill").textContent = n + (n > 1 ? " arrêts" : " arrêt");
   $("stopsTitle").textContent = "Arrêts (" + n + ")";
   if (!n) { $("stopsCard").innerHTML = '<div class="small muted">Aucun arrêt pour l\'instant.</div>'; return; }
-  const nErr = S.stops.filter(s => s.err === "erreur réseau").length;
-  $("stopsCard").innerHTML = (nErr ? `<button class="btn-main" style="margin-bottom:10px" onclick="retryErrors()">Réessayer les ${nErr} adresse(s) en erreur</button>` : "") + S.stops.map((s, i) => `
+  const nErr = S.stops.filter(s => s.err === "erreur réseau" || (!s.err && s.lat != null && farKm(s) > MAX_KM)).length;
+  $("stopsCard").innerHTML = (nErr ? `<button class="btn-main" style="margin-bottom:10px" onclick="retryErrors()">Rechercher à nouveau ${nErr} adresse(s) en erreur ou trop loin</button>` : "") + S.stops.map((s, i) => `
     <div class="stop">
       <div class="num">${i + 1}</div>
       <div class="grow">
         <div class="addr">${esc(s.label)}</div>
-        ${s.err ? `<div class="err">Adresse ${esc(s.err)} : « ${esc(s.raw)} »</div>` : (s.score < 0.45 ? `<div class="warn">À vérifier : ville ou rue différente (saisi : « ${esc(s.raw)} »)</div>` : s.score < 0.6 ? `<div class="small muted">Position approximative : numéro non trouvé sur la carte, ordre de passage fiable</div>` : "")}
+        ${s.err ? `<div class="err">Adresse ${esc(s.err)} : « ${esc(s.raw)} »</div>` : (farKm(s) > MAX_KM ? `<div class="warn">À vérifier : trouvée à ${Math.round(farKm(s))} km du dépôt, touche Corriger (saisi : « ${esc(s.raw)} »)</div>` : s.score < 0.45 ? `<div class="warn">À vérifier : ville ou rue différente (saisi : « ${esc(s.raw)} »)</div>` : s.score < 0.6 ? `<div class="small muted">Position approximative : numéro non trouvé sur la carte, ordre de passage fiable</div>` : "")}
         ${s.note ? `<div class="small muted">${esc(s.note)}</div>` : ""}
         <div class="row" style="margin-top:6px;gap:6px">
           <button class="btn-sm" onclick="fixStop('${s.id}')">Corriger</button>
