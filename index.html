@@ -239,20 +239,25 @@ async function geocode(q, { limit = 1, autocomplete = false } = {}){
   }
   // 2) Secours : Photon (OpenStreetMap), limité à la France
   try {
-    const ph = new URLSearchParams({ q, limit: String(limit), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
+    const ph = new URLSearchParams({ q, limit: String(Math.max(limit, 8)), lang: "fr", bbox: "-5.3,41.2,9.7,51.2" });
     if (S.depot) { ph.set("lat", S.depot.lat); ph.set("lon", S.depot.lon); }
     const r = await fetchT("https://photon.komoot.io/api/?" + ph.toString(), 8000);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
-    const wantsNumber = /^\s*\d/.test(q);
-    return (j.features || []).map(f => {
+    const norm = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const nq = norm(q), wantsNumber = /^\s*\d/.test(q);
+    const res = (j.features || []).map(f => {
       const a = f.properties, street = [a.housenumber, a.street || a.name].filter(Boolean).join(" ");
+      const city = a.city || a.locality;
+      // la ville ou le code postal tapés doivent correspondre, sinon l'adresse est signalée « à vérifier »
+      const match = (city && nq.includes(norm(city))) || (a.postcode && nq.includes(a.postcode));
       return {
-        label: [street, [a.postcode, a.city || a.locality].filter(Boolean).join(" ")].filter(Boolean).join(", "),
-        score: wantsNumber && !a.housenumber ? 0.5 : 0.75,
+        label: [street, [a.postcode, city].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+        score: !match ? 0.4 : (wantsNumber && !a.housenumber ? 0.5 : 0.75),
         lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1]
       };
     });
+    return res.sort((x, y) => y.score - x.score).slice(0, limit);
   } catch (e) { lastErr = e; }
   throw lastErr || new Error("géocodage indisponible");
 }
